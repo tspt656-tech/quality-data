@@ -71,6 +71,42 @@
     .topbar-title { font-size: 12px; }
     .page { padding: 14px; }
     .topbar { position: sticky; top: 0; z-index: 100; }
+    .hamburger {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      cursor: pointer;
+      padding: 4px;
+      margin-right: 10px;
+    }
+    .hamburger span {
+      width: 24px; height: 3px;
+      background: #fff;
+      border-radius: 3px;
+      display: block;
+      transition: 0.3s;
+    }
+    .sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 998;
+    }
+    .sidebar-overlay.show { display: block; }
+    @media (max-width: 768px) {
+      .sidebar {
+        display: none !important;
+        position: fixed !important;
+        left: -260px !important;
+        top: 0; bottom: 0;
+        width: 240px !important;
+        z-index: 999;
+        transition: left 0.3s ease;
+        box-shadow: 4px 0 20px rgba(0,0,0,0.3);
+      }
+      .sidebar.open { left: 0 !important; }
+    }
     .customer-card { min-width: unset; }
     .summary-cards { grid-template-columns: repeat(2, 1fr); gap: 8px; }
     .card-num { font-size: 28px; }
@@ -335,7 +371,8 @@
 <body>
 
 <!-- SIDEBAR -->
-<aside class="sidebar">
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+<aside class="sidebar" id="sidebar">
   <div class="sidebar-logo">
     <div class="logo-icon">Q</div>
     <div>
@@ -927,6 +964,7 @@ function showPage(pageId) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById(pageId).classList.add('active');
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  if (window.innerWidth <= 768) closeSidebar();
   document.querySelectorAll('.bottom-nav-item').forEach(n => n.classList.remove('active'));
   var bnMap = { 'p-main': 'bn-main', 'p-search': 'bn-search' };
   if (bnMap[pageId]) { var bn = document.getElementById(bnMap[pageId]); if (bn) bn.classList.add('active'); }
@@ -1346,6 +1384,37 @@ document.getElementById('today-badge').textContent = (() => {
   let yyyy = d.getFullYear();
   return dd + '/' + mm + '/' + yyyy;
 })();
+
+// ===== MOBILE SIDEBAR =====
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebar-overlay').classList.toggle('show');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('show');
+}
+// Show hamburger on mobile
+if (window.innerWidth <= 768) {
+  document.getElementById('hamburger-btn').style.display = 'flex';
+}
+window.addEventListener('resize', function() {
+  if (window.innerWidth <= 768) {
+    document.getElementById('hamburger-btn').style.display = 'flex';
+  } else {
+    document.getElementById('hamburger-btn').style.display = 'none';
+    closeSidebar();
+  }
+});
+
+// ===== SWIPE GESTURE =====
+var touchStartX = 0;
+document.addEventListener('touchstart', function(e) { touchStartX = e.touches[0].clientX; }, { passive: true });
+document.addEventListener('touchend', function(e) {
+  var dx = e.changedTouches[0].clientX - touchStartX;
+  if (touchStartX < 30 && dx > 60) toggleSidebar();   // swipe right from left edge
+  if (dx < -60 && document.getElementById('sidebar').classList.contains('open')) closeSidebar(); // swipe left to close
+}, { passive: true });
 
 // เริ่ม Firebase Real-time SDK listener — Firebase จะ render เอง
 _initFirebase();
