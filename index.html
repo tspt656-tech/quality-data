@@ -1375,16 +1375,6 @@ function doSearch(q) {
 }
 function searchNav(i) { window._searchResults[i].action(); }
 
-// ============ INIT ============
-loadSavedData();
-document.getElementById('today-badge').textContent = (() => {
-  let d = new Date();
-  let dd = String(d.getDate()).padStart(2,'0');
-  let mm = String(d.getMonth()+1).padStart(2,'0');
-  let yyyy = d.getFullYear();
-  return dd + '/' + mm + '/' + yyyy;
-})();
-
 // ===== MOBILE SIDEBAR =====
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
@@ -1394,6 +1384,16 @@ function closeSidebar() {
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('sidebar-overlay').classList.remove('show');
 }
+
+// ============ INIT ============
+loadSavedData();
+document.getElementById('today-badge').textContent = (() => {
+  let d = new Date();
+  let dd = String(d.getDate()).padStart(2,'0');
+  let mm = String(d.getMonth()+1).padStart(2,'0');
+  let yyyy = d.getFullYear();
+  return dd + '/' + mm + '/' + yyyy;
+})();
 // Show hamburger on mobile
 if (window.innerWidth <= 768) {
   document.getElementById('hamburger-btn').style.display = 'flex';
