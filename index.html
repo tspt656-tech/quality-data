@@ -5,9 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Quality DATA Parts</title>
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<!-- Firebase SDK (compat v9) -->
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<!-- Firebase: ใช้ REST API + SSE -->
 <style>
   :root {
     --cream: #FFF9E9;
@@ -1028,94 +1026,126 @@ function updateMilestonePlan(cid, mid, pid, idx, prop, value) {
 }
 
 // ============ FIREBASE CONFIG ============
-// ===== แก้ค่า apiKey ให้ตรงกับ Firebase Project ของคุณ =====
-// วิธีหา: Firebase Console → Project Settings → Your apps → Web app → apiKey
-var FB_APP_CONFIG = {
-  apiKey: "AIzaSyDd3k4yitpcgO8EaZjAJzEZVZPczT1Zjcw",
-  databaseURL: "https://quality-data-61312-default-rtdb.asia-southeast1.firebasedatabase.app"
-};
+// ============ FIREBASE CONFIG (REST API) ============
+var FB_DB_URL = "https://quality-data-61312-default-rtdb.asia-southeast1.firebasedatabase.app";
 var FB_PATH = "qdatd_v1";
-var _fbDatabase = null;
-var _fbRef      = null;
-var _isSaving   = false;   // กันการ loop ระหว่าง write → listener → write
-var _saveTimer  = null;
+var _isSaving = false;
+var _saveTimer = null;
+var _lastSavedJSON = "";
+var _sseSource = null;
 
-// ============ FIREBASE SDK INIT ============
 function _initFirebase() {
-  // ใช้ Firebase SDK v9 compat (CDN) ที่โหลดใน <head>
-  if (typeof firebase === 'undefined') {
-    console.warn('Firebase SDK not loaded');
-    return;
+  var badge = document.getElementById('sync-badge');
+  if (badge) {
+    badge.textContent = '🟡 กำลังเชื่อมต่อ...';
+    badge.style.background = '#fff8e1';
+    badge.style.color = '#f57f17';
+    badge.style.borderColor = '#ffe082';
   }
-  if (!firebase.apps.length) {
-    firebase.initializeApp(FB_APP_CONFIG);
-  }
-  _fbDatabase = firebase.database();
-  _fbRef      = _fbDatabase.ref(FB_PATH);
 
-  // อัปเดต badge ว่ากำลังเชื่อมต่อ
-  var connRef = _fbDatabase.ref('.info/connected');
-  connRef.on('value', function(snap) {
-    var badge = document.getElementById('sync-badge');
-    if (!badge) return;
-    if (snap.val() === true) {
-      badge.textContent = '🟢 Real-time LIVE';
-      badge.style.background  = '#e8f5e9';
-      badge.style.color       = '#2e7d32';
-      badge.style.borderColor = '#a5d6a7';
-    } else {
-      badge.textContent = '⚠️ ออฟไลน์';
-      badge.style.background  = '#fdecea';
-      badge.style.color       = '#c62828';
-      badge.style.borderColor = '#ef9a9a';
-    }
-  });
-
-  // ============ REAL-TIME LISTENER ============
-  var _firstLoad = true;
-  _fbRef.on('value', function(snapshot) {
-    var saved = snapshot.val();
-    if (!saved) return;
-
-    // ครั้งแรก — ใช้ข้อมูลจาก Firebase เป็น source of truth
-    if (_firstLoad) {
-      _firstLoad = false;
-      data             = saved.data            || data;
-      partMilestones   = saved.partMilestones  || partMilestones;
-      nextCustomerId   = saved.nextCustomerId  || nextCustomerId;
-      nextModelId      = saved.nextModelId     || nextModelId;
-      nextPartId       = saved.nextPartId      || nextPartId;
-      try { localStorage.setItem('qdatd_data', JSON.stringify(saved)); } catch(e) {}
+  // โหลดข้อมูลครั้งแรกผ่าน REST
+  fetch(FB_DB_URL + '/' + FB_PATH + '.json')
+    .then(function(r) { return r.json(); })
+    .then(function(saved) {
+      if (saved && saved.data && saved.data.customers) {
+        data = saved.data;
+        if (saved.partMilestones) partMilestones = saved.partMilestones;
+        if (saved.nextCustomerId) nextCustomerId = saved.nextCustomerId;
+        if (saved.nextModelId) nextModelId = saved.nextModelId;
+        if (saved.nextPartId) nextPartId = saved.nextPartId;
+        _lastSavedJSON = JSON.stringify(saved);
+        renderCustomerGrid();
+      }
+      // เริ่ม SSE listener
+      _startSSE();
+    })
+    .catch(function(err) {
+      console.error('Firebase REST error:', err);
       renderCustomerGrid();
-      return;
-    }
+      if (badge) {
+        badge.textContent = '⚠️ ออฟไลน์';
+        badge.style.background = '#fdecea';
+        badge.style.color = '#c62828';
+        badge.style.borderColor = '#ef9a9a';
+      }
+    });
+}
 
-    // ถ้าเราเองกำลัง save อยู่ → ข้ามไป ไม่ต้อง re-render
+function _startSSE() {
+  var badge = document.getElementById('sync-badge');
+  try {
+    _sseSource = new EventSource(FB_DB_URL + '/' + FB_PATH + '.json?ns=quality-data-61312-default-rtdb&format=export&accept=text/event-stream');
+    _sseSource.addEventListener('put', function(e) {
+      if (badge) {
+        badge.textContent = '🟢 Real-time LIVE';
+        badge.style.background = '#e8f5e9';
+        badge.style.color = '#2e7d32';
+        badge.style.borderColor = '#a5d6a7';
+      }
+      if (_isSaving) return;
+      try {
+        var msg = JSON.parse(e.data);
+        if (msg && msg.data) {
+          var saved = msg.data;
+          var incoming = JSON.stringify(saved);
+          if (incoming === _lastSavedJSON) return;
+          _lastSavedJSON = incoming;
+          if (saved.data && saved.data.customers) data = saved.data;
+          if (saved.partMilestones) partMilestones = saved.partMilestones;
+          if (saved.nextCustomerId) nextCustomerId = saved.nextCustomerId;
+          if (saved.nextModelId) nextModelId = saved.nextModelId;
+          if (saved.nextPartId) nextPartId = saved.nextPartId;
+          renderCustomerGrid();
+          showSaveToast('🔄 อัปเดตจากเครื่องอื่น', '#1565c0');
+        }
+      } catch(err) {}
+    });
+    _sseSource.onerror = function() {
+      // SSE ไม่รองรับ ใช้ polling แทน
+      _sseSource.close();
+      _startPolling();
+    };
+  } catch(err) {
+    _startPolling();
+  }
+}
+
+// Polling fallback ทุก 5 วินาที
+var _pollInterval = null;
+function _startPolling() {
+  var badge = document.getElementById('sync-badge');
+  if (badge) {
+    badge.textContent = '🟢 Real-time LIVE';
+    badge.style.background = '#e8f5e9';
+    badge.style.color = '#2e7d32';
+    badge.style.borderColor = '#a5d6a7';
+  }
+  _pollInterval = setInterval(function() {
     if (_isSaving) return;
-
-    // ข้อมูลมาจากเครื่องอื่น → อัปเดตทันทีโดยไม่ต้อง reload
-    data             = saved.data            || data;
-    partMilestones   = saved.partMilestones  || partMilestones;
-    nextCustomerId   = saved.nextCustomerId  || nextCustomerId;
-    nextModelId      = saved.nextModelId     || nextModelId;
-    nextPartId       = saved.nextPartId      || nextPartId;
-    try { localStorage.setItem('qdatd_data', JSON.stringify(saved)); } catch(e) {}
-
-    // Re-render หน้าที่กำลังแสดงอยู่
-    var activePage = document.querySelector('.page.active');
-    if (activePage) {
-      var pid = activePage.id;
-      if (pid === 'p-main')     renderCustomerGrid();
-      else if (pid === 'p-customer') renderModelGrid();
-      else if (pid === 'p-model')    renderPartsTable();
-      else if (pid === 'p-part')     renderTrials();
-    }
-
-    showSaveToast('🔄 อัปเดตจากเครื่องอื่น', '#1565c0');
-  }, function(err) {
-    console.error('Firebase listener error:', err);
-    showSaveToast('⚠️ ขาดการเชื่อมต่อ', '#e53935');
-  });
+    fetch(FB_DB_URL + '/' + FB_PATH + '.json')
+      .then(function(r) { return r.json(); })
+      .then(function(saved) {
+        if (!saved) return;
+        var incoming = JSON.stringify(saved);
+        if (incoming === _lastSavedJSON) return;
+        _lastSavedJSON = incoming;
+        if (saved.data && saved.data.customers) data = saved.data;
+        if (saved.partMilestones) partMilestones = saved.partMilestones;
+        if (saved.nextCustomerId) nextCustomerId = saved.nextCustomerId;
+        if (saved.nextModelId) nextModelId = saved.nextModelId;
+        if (saved.nextPartId) nextPartId = saved.nextPartId;
+        renderCustomerGrid();
+        showSaveToast('🔄 อัปเดตจากเครื่องอื่น', '#1565c0');
+      })
+      .catch(function() {
+        if (badge) {
+          badge.textContent = '⚠️ ออฟไลน์';
+          badge.style.background = '#fdecea';
+          badge.style.color = '#c62828';
+          badge.style.borderColor = '#ef9a9a';
+        }
+      });
+  }, 5000);
 }
 
 // ============ AUTOSAVE ============
@@ -1126,34 +1156,26 @@ function autoSave() {
     localStorage.setItem('qdatd_data', JSON.stringify(saveData));
   } catch(e) {}
 
-  // 2) ส่งขึ้น Firebase (debounce 600ms)
+  // 2) ส่งขึ้น Firebase REST API (debounce 600ms)
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(function() {
     var payload = { data: data, partMilestones: partMilestones, nextCustomerId: nextCustomerId, nextModelId: nextModelId, nextPartId: nextPartId };
-
-    if (_fbRef) {
-      // ใช้ Firebase SDK set() — listener ของเราเองจะ trigger แต่ _isSaving จะกัน loop
-      _isSaving = true;
-      _fbRef.set(payload)
-        .then(function() {
-          showSaveToast('☁️ ซิงก์แล้ว', '#4caf50');
-          setTimeout(function() { _isSaving = false; }, 800);
-        })
-        .catch(function(err) {
-          console.error('Firebase set error:', err);
-          showSaveToast('⚠️ ซิงก์ไม่สำเร็จ', '#e53935');
-          _isSaving = false;
-        });
-    } else {
-      // Fallback: REST API (กรณี SDK ยังไม่พร้อม)
-      var fbUrl = "https://quality-data-61312-default-rtdb.asia-southeast1.firebasedatabase.app/qdatd_v1.json";
-      fetch(fbUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-        .then(function(r) {
-          if (r.ok) showSaveToast('☁️ ซิงก์แล้ว', '#4caf50');
-          else      showSaveToast('⚠️ ซิงก์ไม่สำเร็จ', '#e53935');
-        })
-        .catch(function() { showSaveToast('💾 บันทึกเฉพาะเครื่อง', '#ff9800'); });
-    }
+    _isSaving = true;
+    _lastSavedJSON = JSON.stringify(payload);
+    fetch(FB_DB_URL + '/' + FB_PATH + '.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+      .then(function(r) {
+        if (r.ok) showSaveToast('☁️ ซิงก์แล้ว', '#4caf50');
+        else showSaveToast('⚠️ ซิงก์ไม่สำเร็จ', '#e53935');
+        setTimeout(function() { _isSaving = false; }, 800);
+      })
+      .catch(function() {
+        showSaveToast('💾 บันทึกเฉพาะเครื่อง', '#ff9800');
+        _isSaving = false;
+      });
   }, 600);
 }
 
